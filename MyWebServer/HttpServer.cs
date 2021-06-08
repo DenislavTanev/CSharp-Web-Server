@@ -1,11 +1,12 @@
-﻿namespace MyWebServer.Server
+﻿namespace MyWebServer
 {
     using System;
     using System.Net;
     using System.Net.Sockets;
     using System.Text;
     using System.Threading.Tasks;
-    using MyWebServer.Server.Http;
+    using MyWebServer.Http;
+    using MyWebServer.Routing;
 
     public class HttpServer
     {
@@ -13,12 +14,26 @@
         private readonly int port;
         private readonly TcpListener listener;
 
-        public HttpServer(string ipAddress, int port)
+        private readonly RoutingTable routingTable;
+
+        public HttpServer(string ipAddress, int port, Action<IRoutingTable> routingTableConfiguration)
         {
             this.ipAddress = IPAddress.Parse(ipAddress);
             this.port = port;
 
             listener = new TcpListener(this.ipAddress, port);
+
+            routingTableConfiguration(this.routingTable = new RoutingTable());
+        }
+
+        public HttpServer(int port, Action<IRoutingTable> routingTable) 
+            : this("127.0.0.1", port, routingTable)
+        {
+        }
+
+        public HttpServer(Action<IRoutingTable> routingTable)
+            : this(5000, routingTable)
+        {
         }
 
         public async Task Start()
@@ -36,11 +51,11 @@
 
                 var requestText = await this.ReadRequest(networkStream);
 
-                Console.WriteLine(requestText);
-
                 var request = HttpRequest.Parse(requestText);
 
-                await WriteResponse(networkStream);
+                var response = this.routingTable.ExecuteRequest(request);
+
+                await WriteResponse(networkStream, response);
 
                 connection.Close();
             }
@@ -55,7 +70,7 @@
 
             var requestBuilder = new StringBuilder();
 
-            while (networkStream.DataAvailable)
+            do
             {
                 var bytesRead = await networkStream.ReadAsync(buffer, 0, bufferLength);
 
@@ -68,33 +83,16 @@
 
                 requestBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
             }
+            while (networkStream.DataAvailable);
 
             return requestBuilder.ToString();
         }
 
-        private async Task WriteResponse(NetworkStream networkStream)
+        private async Task WriteResponse(
+            NetworkStream networkStream,
+            HttpResponse response)
         {
-            var content = @"
-<html>
-    <head>
-        <link rel=""icon"" href=""data:,"">
-    </head>
-    <body>
-        Hello from my server!
-    </body>
-</html>";
-            var contentLength = Encoding.UTF8.GetByteCount(content);
-
-            var response = $@"
-HTTP/1.1 200 OK
-Server: My Web Server
-Date: {DateTime.UtcNow:r}
-Content-Length: {contentLength}
-Content-Type: text/html; charset=UTF-8
-
-{content}";
-
-            var responseBytes = Encoding.UTF8.GetBytes(response);
+            var responseBytes = Encoding.UTF8.GetBytes(response.ToString());
 
             await networkStream.WriteAsync(responseBytes);
         }
